@@ -5,7 +5,9 @@ import Breadcrumbs from "./components/Breadcrumbs";
 import Sidebar from "./components/Sidebar";
 import BooksList from "./components/BooksList";
 import BookDetail from "./components/BookDetail";
-import MockDataBanner from "./components/MockDataBanner";
+import { createClient } from "@supabase/supabase-js";
+
+const supabase = createClient("https://mouqkxrfwzaghtcnncgh.supabase.co", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1vdXFreHJmd3phZ2h0Y25uY2doIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQ0Nzc3NDcsImV4cCI6MjA2MDA1Mzc0N30.uZUaxEhqNfgHAgW-KUYMJS9woNNunekf0nv0U16KlfY");
 
 function App() {
   const navigate = useNavigate();
@@ -13,7 +15,6 @@ function App() {
   const [bookDetail, setBookDetail] = useState(null);
   const [loading, setLoading] = useState(false);
   const [genres, setGenres] = useState([]);
-  const [dataSource, setDataSource] = useState(null);
 
   // Get route parameters
   const { bookId } = params;
@@ -24,25 +25,17 @@ function App() {
   useEffect(() => {
     const loadGenres = async () => {
       try {
-        const response = await fetch("/api/books");
-        if (!response.ok) {
-          throw new Error(`API returned status: ${response.status}`);
-        }
-        const data = await response.json();
+        const { data, error } = await supabase
+          .from('books')
+          .select('*');
 
-        if (!data.books?.length) {
-          console.error("No books data found:", typeof data);
+        if (error) throw error;
+        if (!data?.length) {
+          console.error("No books data found");
           return;
         }
 
-        const booksArray = data.books;
-
-        // Check if using mock data or database
-        if (data.source) {
-          setDataSource(data.source);
-        }
-
-        const genreGroups = groupByGenre(booksArray);
+        const genreGroups = groupByGenre(data);
         setGenres(genreGroups);
       } catch (error) {
         console.error("Error loading genres:", error);
@@ -59,30 +52,43 @@ function App() {
     const fetchBookDetail = async () => {
       setLoading(true);
       try {
-        // First get basic book details
-        const bookResponse = await fetch(`/api/books/${bookId}`);
+        // Get book details
+        const { data: bookData, error: bookError } = await supabase
+          .from('books')
+          .select('*')
+          .eq('id', bookId)
+          .single();
 
-        if (!bookResponse.ok) {
-          throw new Error(`API returned status: ${bookResponse.status}`);
-        }
+        if (bookError) throw bookError;
 
-        const bookData = await bookResponse.json();
+        // Get related books (same genre)
+        const { data: relatedBooks, error: relatedError } = await supabase
+          .from('books')
+          .select('*')
+          .eq('genre', bookData.genre)
+          .neq('id', bookId)
+          .limit(5);
 
-        // Then get related books data
-        const relatedResponse = await fetch(`/api/books/${bookId}/related`);
+        if (relatedError) throw relatedError;
 
-        if (!relatedResponse.ok) {
-          throw new Error(`API returned status: ${relatedResponse.status}`);
-        }
+        // Get recent books (last 5 added)
+        const { data: recentBooks, error: recentError } = await supabase
+          .from('books')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(5);
 
-        const relatedData = await relatedResponse.json();
+        if (recentError) throw recentError;
 
         // Combine the data
         const combinedData = {
-          book: bookData.book,
-          relatedBooks: relatedData.relatedBooks,
-          recentRecommendations: relatedData.recentRecommendations,
-          genreStats: relatedData.genreStats,
+          book: bookData,
+          relatedBooks: relatedBooks,
+          recentRecommendations: recentBooks,
+          genreStats: {
+            count: relatedBooks.length,
+            genre: bookData.genre
+          }
         };
 
         setBookDetail(combinedData);
@@ -142,9 +148,6 @@ function App() {
               ? `Explore our collection of ${activeGenre.toLowerCase()} books`
               : "Discover your next favorite book"}
           </p>
-
-          {/* Show banner only when using mock data */}
-          {dataSource === "mock" && <MockDataBanner />}
         </div>
 
         {bookId ? (
